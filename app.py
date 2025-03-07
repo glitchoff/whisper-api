@@ -61,5 +61,5 @@ async def transcribe(file: UploadFile = File(...)):
             os.remove(transcript_path)
 
 if __name__ == "__main__":
-    import uvicorn
+    import uvicorn 
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
