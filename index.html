@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Whisper Recording Demo</title>
+</head>
+<body>
+  <h1>Record and Transcribe</h1>
+  <button id="startBtn">Start Recording</button>
+  <button id="stopBtn" disabled>Stop Recording</button>
+  <pre id="result"></pre>
+
+  <script>
+    let recorder;
+    let chunks = [];
+
+    // Start recording from the mic
+    async function startRecording() {
+      chunks = []; // reset chunks for a new recording
+      try {
+        // Request microphone access
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Create the MediaRecorder
+        recorder = new MediaRecorder(stream);
+
+        // On data available, push the audio data chunk into 'chunks'
+        recorder.ondataavailable = e => {
+          if (e.data.size > 0) {
+            chunks.push(e.data);
+          }
+        };
+
+        // Start recording
+        recorder.start();
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = false;
+        document.getElementById('result').textContent = 'Recording...';
+      } catch (err) {
+        document.getElementById('result').textContent = 'Microphone access denied or error: ' + err;
+      }
+    }
+
+    // Stop recording and send data to the API
+    function stopRecording() {
+      if (!recorder) return;
+      recorder.stop();
+
+      recorder.onstop = () => {
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+        document.getElementById('result').textContent = 'Uploading...';
+
+        // Combine all recorded chunks into a single Blob
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+
+        // Prepare FormData with the file field named "file"
+        const formData = new FormData();
+        // The third parameter is the filename - the server sees this as 'recording.webm'
+        formData.append('file', blob, 'recording.webm');
+
+        // Send the POST request
+        fetch('https://whisper-api-c1br.onrender.com/transcribe', {
+          method: 'POST',
+          body: formData
+        })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Network response was not OK');
+          }
+          return response.json();
+        })
+        .then(data => {
+          // Display the JSON transcription result
+          document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+        })
+        .catch(err => {
+          document.getElementById('result').textContent = 'Error: ' + err.message;
+        });
+      };
+    }
+
+    // Hook up event listeners
+    document.getElementById('startBtn').addEventListener('click', startRecording);
+    document.getElementById('stopBtn').addEventListener('click', stopRecording);
+  </script>
+</body>
+</html>
