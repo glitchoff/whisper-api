@@ -1,88 +1,65 @@
-from flask import Flask, request, jsonify
-from wasmer import engine, Store, Module, Instance, ImportObject
 import os
-import fs, pathlib
-import time
+import tempfile
+import json
+import subprocess
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
 
-app = Flask(__name__)
+app = FastAPI(title="Insanely Fast Whisper API")
 
-# Load the WASM module.
-wasm_file_path = "whisper.wasm"  # Adjust if necessary.
-store = Store(engine.JIT(compiler="cranelift"))
-with open(wasm_file_path, "rb") as wasm_file:
-    wasm_bytes = wasm_file.read()
-module = Module(store, wasm_bytes)
-# Create an empty ImportObject unless your module requires imports.
-import_object = ImportObject()
-instance = Instance(module, import_object)
+def run_transcription(audio_path: str, transcript_path: str) -> None:
+    """
+    Calls the insanely-fast-whisper CLI to transcribe the given audio file.
+    The transcription output is saved to transcript_path.
+    """
+    # Adjust additional CLI arguments as needed (e.g., --model-name, --flash, etc.)
+    cmd = [
+        "insanely-fast-whisper",
+        "--file-name", audio_path,
+        "--transcript-path", transcript_path,
+        # Uncomment or add other options as required:
+        # "--model-name", "openai/whisper-large-v3",
+        # "--device-id", "0"
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise Exception(f"CLI error: {result.stderr}")
 
-# Map exported functions from the WASM module.
-allocate = instance.exports.allocate     # Should allocate memory; returns pointer.
-free = instance.exports.free             # Frees memory.
-load_audio = instance.exports.load_audio # Loads audio data into the module.
-run_whisper = instance.exports.run_whisper  # Runs the transcription.
-get_transcript = instance.exports.get_transcript  # Returns a pointer to a null-terminated transcript.
+@app.post("/transcribe")
+async def transcribe(file: UploadFile = File(...)):
+    """
+    Accepts an uploaded audio file, runs transcription via insanely-fast-whisper,
+    and returns the JSON transcription.
+    """
+    # Save the uploaded file to a temporary location
+    file_ext = os.path.splitext(file.filename)[1]
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_audio:
+            contents = await file.read()
+            tmp_audio.write(contents)
+            audio_path = tmp_audio.name
 
-def read_null_terminated_string(ptr):
-    mem_view = instance.exports.memory.uint8_view()
-    chars = []
-    i = ptr
-    while mem_view[i] != 0:
-        chars.append(chr(mem_view[i]))
-        i += 1
-    return "".join(chars)
+        # Create a temporary file for the transcription output
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp_transcript:
+            transcript_path = tmp_transcript.name
 
-@app.route("/transcribe", methods=["POST"])
-def transcribe():
-    # Check if an audio file was uploaded.
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-    audio_file = request.files["file"]
-    audio_bytes = audio_file.read()
-    
-    # Allocate memory in WASM and copy audio bytes.
-    audio_length = len(audio_bytes)
-    ptr = allocate(audio_length)
-    memory = instance.exports.memory.uint8_view(ptr)
-    for i, b in enumerate(audio_bytes):
-        memory[i] = b
-    
-    # Call the WASM function to load the audio.
-    load_audio(ptr, audio_length)
-    
-    # Free the allocated memory for audio input.
-    free(ptr)
-    
-    # Run the Whisper transcription.
-    run_whisper()
-    
-    # Retrieve the transcript from WASM memory.
-    transcript_ptr = get_transcript()
-    transcript = read_null_terminated_string(transcript_ptr)
-    
-    # Optionally, save the audio file in /public/recordings (for inspection).
-    recordings_dir = os.path.join(os.getcwd(), "public", "recordings")
-    pathlib.Path(recordings_dir).mkdir(parents=True, exist_ok=True)
-    timestamp = int(time.time())
-    file_name = f"recording-{timestamp}.wav"
-    file_path = os.path.join(recordings_dir, file_name)
-    with open(file_path, "wb") as f:
-        f.write(audio_bytes)
-    
-    # Return the transcript and a URL (relative) to the saved file.
-    # Adjust file URL according to your deployment.
-    file_url = f"/recordings/{file_name}"
-    
-    if transcript.strip() == "":
-        return jsonify({
-            "error": "Empty transcription",
-            "details": "Transcript is empty or undefined",
-            "fileUrl": file_url
-        }), 500
+        # Run the transcription
+        run_transcription(audio_path, transcript_path)
 
-    return jsonify({"transcript": transcript, "fileUrl": file_url}), 200
+        # Read and parse the transcription output
+        with open(transcript_path, "r") as f:
+            transcript_data = json.load(f)
+
+        return JSONResponse(content=transcript_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Clean up temporary files if they exist
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+        if 'transcript_path' in locals() and os.path.exists(transcript_path):
+            os.remove(transcript_path)
 
 if __name__ == "__main__":
-    # Use PORT environment variable for Render or default to 5000.
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

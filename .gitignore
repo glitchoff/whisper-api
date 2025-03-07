@@ -1,20 +1,17 @@
 # Virtual environment
 venv/
 
-# Byte-compiled / optimized / DLL files
+# Byte-compiled files
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Environment variables file (if you use one)
+# Environment file (if used)
 .env
 
 # OS-specific files
 .DS_Store
 Thumbs.db
- 
-# Logs
-*.log
 
-# Recordings folder (if you don't want to push generated files)
+# Recordings folder (if you don't want to push generated recordings)
 public/recordings/
